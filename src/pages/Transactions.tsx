@@ -34,9 +34,12 @@ export default function Transactions({
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedEntity, setSelectedEntity] = useState<number | ''>('');
   const [notes, setNotes] = useState('');
+  const [dueDate, setDueDate] = useState('');
   
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+
+  const [lastOrderId, setLastOrderId] = useState<number | null>(null);
 
   // Item Input State
   const [selectedProduct, setSelectedProduct] = useState<number | ''>('');
@@ -109,6 +112,7 @@ export default function Transactions({
 
     setLoading(true);
     setMessage('');
+    setLastOrderId(null);
 
     try {
       if (category === 'Sales') {
@@ -117,9 +121,12 @@ export default function Transactions({
           type: 'sales',
           entity_id: Number(selectedEntity),
           items: cart.map(item => ({ product_id: item.product_id, quantity: item.quantity, price: item.price })),
-          notes
+          notes,
+          due_date: dueDate || undefined,
+          status: 'pending'
         });
         setMessage(`Success! Sales Order #${result.ref} created.`);
+        setLastOrderId(result.orderId);
       } else {
         // Manual Transaction (Adjustment, Scrap, etc.)
         for (const item of cart) {
@@ -137,6 +144,7 @@ export default function Transactions({
       setCart([]);
       setSelectedEntity('');
       setNotes('');
+      setDueDate('');
       // Refresh products to show updated stock
       api.getProducts().then(setProducts);
     } catch (err) {
@@ -145,10 +153,6 @@ export default function Transactions({
     } finally {
       setLoading(false);
     }
-  };
-
-  const generateDocument = () => {
-    alert(`Generating ${type === 'purchase' ? 'Purchase Order' : 'Invoice'}... (Feature coming soon)`);
   };
 
   const handleProductSelect = (id: number) => {
@@ -169,25 +173,25 @@ export default function Transactions({
         <div className="grid grid-cols-2 gap-4">
           <button
             onClick={() => { setType('purchase'); setCart([]); setSelectedEntity(''); }}
-            className={`p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all ${
+            className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all ${
               type === 'purchase' 
-                ? 'border-emerald-500 bg-emerald-50 text-emerald-700' 
-                : 'border-gray-200 hover:border-emerald-200'
+                ? 'border-emerald-500 bg-emerald-50 text-emerald-700 shadow-sm' 
+                : 'border-gray-100 bg-white text-gray-500 hover:border-emerald-200 hover:text-emerald-600'
             }`}
           >
             <ArrowLeft className="h-6 w-6" />
-            <span className="font-bold">Stock IN (Purchase)</span>
+            <span className="font-bold">Direct Manual Input</span>
           </button>
           <button
             onClick={() => { setType('sales'); setCart([]); setSelectedEntity(''); }}
-            className={`p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all ${
+            className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all ${
               type === 'sales' 
-                ? 'border-red-500 bg-red-50 text-red-700' 
-                : 'border-gray-200 hover:border-red-200'
+                ? 'border-rose-500 bg-rose-50 text-rose-700 shadow-sm' 
+                : 'border-gray-100 bg-white text-gray-500 hover:border-rose-200 hover:text-rose-600'
             }`}
           >
             <ArrowRight className="h-6 w-6" />
-            <span className="font-bold">Stock OUT (Sales)</span>
+            <span className="font-bold">Direct Manual Output</span>
           </button>
         </div>
       )}
@@ -195,14 +199,17 @@ export default function Transactions({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Input */}
         <div className="lg:col-span-1 space-y-6">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <h3 className="font-bold text-gray-900 mb-4">1. Transaction Details</h3>
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
+              <span className="bg-slate-100 text-slate-600 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
+              Transaction Details
+            </h3>
             
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Category</label>
                 <select 
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 disabled:bg-gray-100 disabled:text-gray-500"
+                  className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-sm disabled:bg-gray-50 disabled:text-gray-400"
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
                   disabled={lockCategory}
@@ -218,11 +225,11 @@ export default function Transactions({
 
               {category === 'Sales' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
                     {type === 'purchase' ? 'Supplier' : 'Customer'}
                   </label>
                   <select 
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-sm"
                     value={selectedEntity}
                     onChange={(e) => setSelectedEntity(e.target.value)}
                   >
@@ -237,9 +244,9 @@ export default function Transactions({
 
               {category !== 'Sales' && type === 'purchase' && (
                  <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Supplier (Optional)</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Supplier (Optional)</label>
                   <select 
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-sm"
                     value={selectedEntity}
                     onChange={(e) => setSelectedEntity(e.target.value)}
                   >
@@ -249,10 +256,22 @@ export default function Transactions({
                 </div>
               )}
 
+              {category === 'Sales' && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Due Date</label>
+                  <input 
+                    type="date"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-sm"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
+                </div>
+              )}
+
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
                 <textarea 
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                  className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-sm"
                   rows={2}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
@@ -262,13 +281,16 @@ export default function Transactions({
             </div>
           </div>
 
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <h3 className="font-bold text-gray-900 mb-4">2. Add Items</h3>
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
+              <span className="bg-slate-100 text-slate-600 w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span>
+              Add Items
+            </h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Product</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Product</label>
                 <select 
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                  className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-sm"
                   value={selectedProduct}
                   onChange={(e) => handleProductSelect(Number(e.target.value))}
                 >
@@ -283,21 +305,21 @@ export default function Transactions({
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Quantity</label>
                   <input 
                     type="number" 
                     min="1" 
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-sm"
                     value={quantity}
                     onChange={(e) => setQuantity(Number(e.target.value))}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Price</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Price</label>
                   <input 
                     type="number" 
                     min="0" 
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-sm"
                     value={price}
                     onChange={(e) => setPrice(Number(e.target.value))}
                   />
@@ -307,7 +329,7 @@ export default function Transactions({
               <button 
                 onClick={addToCart}
                 disabled={!selectedProduct}
-                className="w-full bg-gray-900 text-white py-2 rounded-lg hover:bg-gray-800 flex items-center justify-center gap-2"
+                className="w-full bg-slate-900 text-white py-2.5 rounded-xl hover:bg-slate-800 flex items-center justify-center gap-2 transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:shadow-none"
               >
                 <Plus className="h-4 w-4" /> Add to List
               </button>
@@ -317,18 +339,18 @@ export default function Transactions({
 
         {/* Right Column: Cart & Actions */}
         <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 h-full flex flex-col">
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 h-full flex flex-col">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-gray-900 flex items-center gap-2">
-                <ShoppingCart className="h-5 w-5" />
+              <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                <ShoppingCart className="h-5 w-5 text-slate-500" />
                 Items List
               </h3>
-              <span className="text-sm text-gray-500">{cart.length} items</span>
+              <span className="text-sm text-slate-500 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">{cart.length} items</span>
             </div>
 
-            <div className="flex-1 overflow-auto border rounded-lg mb-6">
+            <div className="flex-1 overflow-auto border border-gray-100 rounded-xl mb-6">
               <table className="w-full text-sm text-left">
-                <thead className="bg-gray-50 text-gray-500 uppercase text-xs">
+                <thead className="bg-slate-50/50 text-slate-500 uppercase text-xs font-semibold tracking-wider border-b border-gray-100">
                   <tr>
                     <th className="px-4 py-3">Product</th>
                     <th className="px-4 py-3 text-right">Price</th>
@@ -337,33 +359,33 @@ export default function Transactions({
                     <th className="px-4 py-3 text-center">Action</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-gray-50">
                   {cart.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
+                      <td colSpan={5} className="px-4 py-12 text-center text-slate-400 italic">
                         No items added yet
                       </td>
                     </tr>
                   ) : (
                     cart.map((item, index) => (
-                      <tr key={index} className="border-b last:border-0">
+                      <tr key={index} className="hover:bg-slate-50/50 transition-colors">
                         <td className="px-4 py-3">
-                          <div className="font-medium">{item.product_name}</div>
-                          <div className="text-xs text-gray-500">{item.sku}</div>
+                          <div className="font-medium text-slate-900">{item.product_name}</div>
+                          <div className="text-xs text-slate-500 font-mono">{item.sku}</div>
                         </td>
-                        <td className="px-4 py-3 text-right text-gray-500">
+                        <td className="px-4 py-3 text-right text-slate-600">
                           ${item.price.toLocaleString()}
                         </td>
-                        <td className="px-4 py-3 text-right font-bold">
+                        <td className="px-4 py-3 text-right font-medium text-slate-900">
                           {item.quantity}
                         </td>
-                        <td className="px-4 py-3 text-right font-bold text-emerald-600">
+                        <td className={`px-4 py-3 text-right font-bold ${type === 'purchase' ? 'text-emerald-600' : 'text-rose-600'}`}>
                           ${(item.price * item.quantity).toLocaleString()}
                         </td>
                         <td className="px-4 py-3 text-center">
                           <button 
                             onClick={() => removeFromCart(index)}
-                            className="text-red-500 hover:text-red-700 p-1"
+                            className="text-slate-400 hover:text-red-500 p-1 transition-colors"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -373,10 +395,10 @@ export default function Transactions({
                   )}
                 </tbody>
                 {cart.length > 0 && (
-                  <tfoot className="bg-gray-50 font-bold">
+                  <tfoot className="bg-slate-50/50 font-bold border-t border-gray-100">
                     <tr>
-                      <td colSpan={3} className="px-4 py-3 text-right">Grand Total:</td>
-                      <td className="px-4 py-3 text-right text-emerald-600">
+                      <td colSpan={3} className="px-4 py-3 text-right text-slate-600">Grand Total:</td>
+                      <td className={`px-4 py-3 text-right text-lg ${type === 'purchase' ? 'text-emerald-600' : 'text-rose-600'}`}>
                         ${cart.reduce((acc, item) => acc + (item.price * item.quantity), 0).toLocaleString()}
                       </td>
                       <td></td>
@@ -386,30 +408,31 @@ export default function Transactions({
               </table>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <button 
-                onClick={generateDocument}
-                disabled={cart.length === 0 || !selectedEntity}
-                className="py-3 px-4 border-2 border-gray-200 rounded-lg text-gray-600 font-bold hover:bg-gray-50 flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                <FileText className="h-5 w-5" />
-                {type === 'purchase' ? 'Generate PO' : 'Generate Invoice'}
-              </button>
-              
+            <div className="flex flex-col gap-4 justify-end items-end">
               <button 
                 onClick={handleSubmit}
                 disabled={cart.length === 0 || (category === 'Sales' && !selectedEntity) || loading}
-                className={`py-3 px-4 rounded-lg text-white font-bold flex items-center justify-center gap-2 disabled:opacity-50 ${
-                  type === 'purchase' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'
-                } ${category !== 'Sales' ? 'col-span-2' : ''}`}
+                className={`py-3 px-6 rounded-xl text-white font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition-all shadow-sm hover:shadow-md ${
+                  type === 'purchase' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'
+                }`}
               >
                 {loading ? 'Processing...' : 'Confirm Transaction'}
               </button>
             </div>
 
             {message && (
-              <div className={`mt-4 p-3 rounded-lg text-center ${message.includes('Error') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
-                {message}
+              <div className={`mt-4 p-3 rounded-xl text-center text-sm font-medium flex flex-col items-center gap-2 ${message.includes('Error') ? 'bg-red-50 text-red-700 border border-red-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'}`}>
+                <span>{message}</span>
+                {lastOrderId && category === 'Sales' && (
+                  <a 
+                    href={`/document?type=sales&id=${lastOrderId}`} 
+                    target="_blank"
+                    className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-900 underline font-bold"
+                  >
+                    <FileText className="h-4 w-4" />
+                    Print Invoice
+                  </a>
+                )}
               </div>
             )}
           </div>

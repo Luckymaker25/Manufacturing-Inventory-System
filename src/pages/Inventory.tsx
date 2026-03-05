@@ -1,5 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { api, Product, Supplier } from '@/lib/api';
+import React, { useEffect, useState, useRef } from 'react';
+import { api, Product, Supplier, Transaction } from '@/lib/api';
+import { exportToCSV } from '@/lib/exportUtils';
+import { useAuth } from '@/lib/auth';
+import { cn } from '@/lib/utils';
 import {
   createColumnHelper,
   flexRender,
@@ -9,9 +12,73 @@ import {
   getFilteredRowModel,
   SortingState,
 } from '@tanstack/react-table';
-import { ArrowUpDown, Search, Plus, Trash2, Edit, X } from 'lucide-react';
+import { ArrowUpDown, Search, Plus, Trash2, Edit, X, Download, AlertTriangle, ShoppingCart, Send } from 'lucide-react';
+
+interface SupplierBadgeProps {
+  supplier: Supplier;
+}
+
+const SupplierBadge: React.FC<SupplierBadgeProps> = ({ supplier }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const badgeRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (badgeRef.current && !badgeRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={badgeRef} className="relative inline-block">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen(!isOpen);
+        }}
+        className={cn(
+          "text-xs px-2 py-1 rounded-md border transition-colors inline-block cursor-pointer select-none",
+          isOpen
+            ? "bg-slate-800 text-white border-slate-800"
+            : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200 hover:text-slate-800"
+        )}
+      >
+        {supplier.name}
+      </button>
+      {isOpen && (
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-slate-800 text-white text-xs rounded-xl shadow-xl z-50 text-left cursor-auto">
+          <div className="font-bold text-emerald-400 mb-1.5 text-sm border-b border-slate-700 pb-1">{supplier.name}</div>
+          <div className="space-y-1.5 text-slate-300">
+            <div className="flex items-start gap-2">
+              <span className="opacity-50 font-mono text-[10px] uppercase tracking-wider mt-0.5">Email</span>
+              <span className="flex-1 break-all">{supplier.email || 'N/A'}</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="opacity-50 font-mono text-[10px] uppercase tracking-wider mt-0.5">Addr</span>
+              <span className="flex-1">{supplier.address || 'N/A'}</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="opacity-50 font-mono text-[10px] uppercase tracking-wider mt-0.5">Tel</span>
+              <span className="flex-1">{supplier.contact || 'N/A'}</span>
+            </div>
+          </div>
+          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default function Inventory() {
+  const [activeTab, setActiveTab] = useState<'all' | 'low-stock'>('all');
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -19,9 +86,17 @@ export default function Inventory() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<Transaction[]>([]);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   
+  // Purchase Request State
+  const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
+  const [requestProduct, setRequestProduct] = useState<Product | null>(null);
+  const [requestQty, setRequestQty] = useState(0);
+  const [requestNotes, setRequestNotes] = useState('');
+  const [requestedProductIds, setRequestedProductIds] = useState<number[]>([]);
+  const { role, hasPermission } = useAuth();
+
   // Form State
   const [itemType, setItemType] = useState<'raw' | 'finished'>('raw');
   const [selectedSuppliers, setSelectedSuppliers] = useState<number[]>([]);
@@ -29,11 +104,66 @@ export default function Inventory() {
 
   useEffect(() => {
     loadData();
+    loadRequestedProducts();
   }, []);
 
   const loadData = () => {
     api.getProducts().then(setProducts);
     api.getSuppliers().then(setSuppliers);
+  };
+
+  const loadRequestedProducts = async () => {
+    try {
+      const requests = await api.getPurchaseRequests();
+      if (Array.isArray(requests)) {
+        setRequestedProductIds(requests.map(r => r.product_id));
+      } else {
+        setRequestedProductIds([]);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleRequestPurchase = (product: Product) => {
+    setRequestProduct(product);
+    const suggestedQty = Math.max(product.min_stock * 2 - product.stock, 1);
+    setRequestQty(suggestedQty); 
+    setRequestNotes('');
+    setIsRequestModalOpen(true);
+  };
+
+  const submitPurchaseRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!requestProduct) return;
+
+    try {
+      await api.createPurchaseRequest({
+        product_id: requestProduct.id,
+        requested_qty: requestQty,
+        notes: requestNotes
+      });
+      setRequestedProductIds([...requestedProductIds, requestProduct.id]);
+      setIsRequestModalOpen(false);
+      alert('Purchase Request Sent!');
+    } catch (err) {
+      alert('Failed to send request');
+    }
+  };
+
+  const handleExport = () => {
+    const dataToExport = products.map(p => ({
+      ID: p.id,
+      Name: p.name,
+      SKU: p.sku,
+      Type: p.type,
+      Stock: p.stock,
+      Unit: p.unit,
+      MinStock: p.min_stock,
+      CostPrice: p.cost_price,
+      Suppliers: p.suppliers?.map(s => s.name).join(', ') || ''
+    }));
+    exportToCSV(dataToExport, 'inventory_data');
   };
 
   const handleEdit = async (product: Product) => {
@@ -131,13 +261,11 @@ export default function Inventory() {
       header: 'Suppliers',
       cell: info => {
         const sups = info.getValue();
-        if (!sups || sups.length === 0) return <span className="text-gray-400 text-xs">-</span>;
+        if (!sups || sups.length === 0) return <span className="text-slate-400 text-xs italic">No suppliers</span>;
         return (
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap gap-1.5">
             {sups.map(s => (
-              <span key={s.id} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
-                {s.name}
-              </span>
+              <SupplierBadge key={s.id} supplier={s} />
             ))}
           </div>
         );
@@ -145,14 +273,36 @@ export default function Inventory() {
     }),
     columnHelper.display({
       id: 'actions',
-      cell: info => (
-        <button 
-          onClick={() => handleEdit(info.row.original)}
-          className="text-gray-500 hover:text-emerald-600 p-1 rounded-full hover:bg-gray-100"
-        >
-          <Edit className="h-4 w-4" />
-        </button>
-      )
+      cell: info => {
+        const product = info.row.original;
+        const isRequested = requestedProductIds.includes(product.id);
+        return (
+          <div className="flex items-center gap-1 justify-end">
+            <button
+              onClick={() => handleRequestPurchase(product)}
+              disabled={isRequested}
+              title={isRequested ? "Already Requested" : "Request Purchase"}
+              className={cn(
+                "p-1.5 rounded-lg transition-colors",
+                isRequested 
+                  ? "text-blue-400 bg-blue-50 cursor-not-allowed" 
+                  : "text-slate-400 hover:text-blue-600 hover:bg-blue-50"
+              )}
+            >
+              <ShoppingCart className="h-4 w-4" />
+            </button>
+            {hasPermission(['Warehouse Staff']) && (
+              <button 
+                onClick={() => handleEdit(product)}
+                className="text-slate-400 hover:text-emerald-600 p-1.5 rounded-lg hover:bg-emerald-50 transition-colors"
+                title="Edit Product"
+              >
+                <Edit className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        );
+      }
     })
   ];
 
@@ -226,40 +376,90 @@ export default function Inventory() {
   };
 
   const rawMaterials = products.filter(p => p.type === 'raw');
+  const lowStockProducts = products.filter(p => p.stock <= p.min_stock);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Inventory Management</h1>
-        <button 
-          onClick={() => { resetForm(); setIsModalOpen(true); }}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+        <div className="flex gap-2">
+          {hasPermission(['Warehouse Staff']) && (
+            <button 
+              onClick={handleExport}
+              className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-5 py-2.5 rounded-xl shadow-sm hover:shadow-md transition-all flex items-center gap-2 font-medium"
+            >
+              <Download className="h-4 w-4" />
+              Export CSV
+            </button>
+          )}
+          {hasPermission(['Warehouse Staff']) && (
+            <button 
+              onClick={() => { resetForm(); setIsModalOpen(true); }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl shadow-sm hover:shadow-md transition-all flex items-center gap-2 font-medium"
+            >
+              <Plus className="h-4 w-4" />
+              Add Item
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-4 border-b border-gray-200 overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('all')}
+          className={`pb-4 px-2 font-medium transition-colors relative whitespace-nowrap ${
+            activeTab === 'all' ? 'text-emerald-600' : 'text-slate-500 hover:text-slate-700'
+          }`}
         >
-          <Plus className="h-4 w-4" />
-          Add Item
+          All Items
+          {activeTab === 'all' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-600" />
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('low-stock')}
+          className={`pb-4 px-2 font-medium transition-colors relative whitespace-nowrap ${
+            activeTab === 'low-stock' ? 'text-rose-600' : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4" />
+            Low Stock & Requests
+            <span className="bg-rose-100 text-rose-700 text-xs px-2 py-0.5 rounded-full">
+              {lowStockProducts.length}
+            </span>
+          </div>
+          {activeTab === 'low-stock' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-rose-600" />
+          )}
         </button>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="p-4 border-b border-gray-100">
-          <div className="relative max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+      {activeTab === 'all' ? (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="p-4 border-b border-gray-100 flex items-center justify-between gap-4">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <input
               value={globalFilter ?? ''}
               onChange={e => setGlobalFilter(e.target.value)}
               placeholder="Search products..."
-              className="pl-9 pr-4 py-2 w-full border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="pl-10 pr-4 py-2.5 w-full border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
             />
+          </div>
+          <div className="flex gap-2">
+             {/* Future filters could go here */}
           </div>
         </div>
         
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
-            <thead className="text-xs text-gray-500 uppercase bg-gray-50">
+            <thead className="text-xs font-semibold text-slate-500 uppercase tracking-wider bg-slate-50/50 border-b border-gray-100">
               {table.getHeaderGroups().map(headerGroup => (
                 <tr key={headerGroup.id}>
                   {headerGroup.headers.map(header => (
-                    <th key={header.id} className="px-6 py-3">
+                    <th key={header.id} className="px-6 py-4">
                       {header.isPlaceholder
                         ? null
                         : flexRender(
@@ -271,11 +471,11 @@ export default function Inventory() {
                 </tr>
               ))}
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-gray-50">
               {table.getRowModel().rows.map(row => (
-                <tr key={row.id} className="border-b hover:bg-gray-50">
+                <tr key={row.id} className="hover:bg-slate-50/50 transition-colors group">
                   {row.getVisibleCells().map(cell => (
-                    <td key={cell.id} className="px-6 py-4">
+                    <td key={cell.id} className="px-6 py-4 text-slate-600 group-hover:text-slate-900 transition-colors">
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
                   ))}
@@ -285,6 +485,137 @@ export default function Inventory() {
           </table>
         </div>
       </div>
+
+      ) : (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-6 border-b border-gray-100">
+            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-rose-500" />
+              Low Stock Items
+            </h2>
+            <p className="text-slate-500 text-sm mt-1">Items below minimum stock level needing replenishment.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-slate-50/50 text-slate-500 uppercase text-xs font-semibold tracking-wider border-b border-gray-100">
+                <tr>
+                  <th className="px-6 py-4">SKU</th>
+                  <th className="px-6 py-4">Product Name</th>
+                  <th className="px-6 py-4 text-right">Current Stock</th>
+                  <th className="px-6 py-4 text-right">Min Stock</th>
+                  <th className="px-6 py-4 text-center">Status</th>
+                  <th className="px-6 py-4 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {lowStockProducts.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-12 text-center text-slate-400 italic">
+                      No low stock items found. Good job!
+                    </td>
+                  </tr>
+                ) : (
+                  lowStockProducts.map(product => {
+                    const isRequested = requestedProductIds.includes(product.id);
+                    return (
+                      <tr key={product.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4 font-mono text-slate-600">{product.sku}</td>
+                        <td className="px-6 py-4 font-medium text-slate-900">{product.name}</td>
+                        <td className="px-6 py-4 text-right font-bold text-rose-600">{product.stock} {product.unit}</td>
+                        <td className="px-6 py-4 text-right text-slate-500">{product.min_stock} {product.unit}</td>
+                        <td className="px-6 py-4 text-center">
+                          {isRequested ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                              <Send className="h-3 w-3" /> Requested
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-50 text-rose-700 border border-rose-100">
+                              <AlertTriangle className="h-3 w-3" /> Low Stock
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={() => handleRequestPurchase(product)}
+                            disabled={isRequested}
+                            className="px-3 py-1.5 bg-slate-900 text-white text-xs font-bold rounded-lg hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm flex items-center gap-2 ml-auto"
+                          >
+                            <ShoppingCart className="h-3 w-3" />
+                            {isRequested ? 'Requested' : 'Request Purchase'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Purchase Request Modal */}
+      {isRequestModalOpen && requestProduct && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-6 border-b border-gray-100 bg-slate-50/50">
+              <h3 className="font-bold text-lg text-slate-900">Request Purchase</h3>
+              <p className="text-sm text-slate-500">{requestProduct.name} ({requestProduct.sku})</p>
+            </div>
+            <form onSubmit={submitPurchaseRequest} className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Current Stock</label>
+                  <div className="text-rose-600 font-bold">{requestProduct.stock} {requestProduct.unit}</div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Min Stock</label>
+                  <div className="text-slate-700 font-bold">{requestProduct.min_stock} {requestProduct.unit}</div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Requested Quantity</label>
+                <input 
+                  type="number" 
+                  required
+                  min="1"
+                  className="w-full rounded-xl border border-gray-200 px-3 py-2 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                  value={requestQty}
+                  onChange={(e) => setRequestQty(Number(e.target.value))}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Notes (Optional)</label>
+                <textarea 
+                  className="w-full rounded-xl border border-gray-200 px-3 py-2 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                  rows={3}
+                  value={requestNotes}
+                  onChange={(e) => setRequestNotes(e.target.value)}
+                  placeholder="Urgency, preferred supplier, etc."
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setIsRequestModalOpen(false)}
+                  className="flex-1 py-2.5 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit"
+                  className="flex-1 py-2.5 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all"
+                >
+                  Submit Request
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto">
@@ -418,59 +749,65 @@ export default function Inventory() {
       )}
 
       {isHistoryModalOpen && historyProduct && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-opacity">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh] ring-1 ring-slate-900/5">
+            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">Transaction History</h2>
-                <p className="text-sm text-gray-500">{historyProduct.name} ({historyProduct.sku})</p>
+                <h2 className="text-xl font-bold text-slate-900 tracking-tight">Transaction History</h2>
+                <p className="text-sm text-slate-500 mt-1">{historyProduct.name} <span className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 ml-2">{historyProduct.sku}</span></p>
               </div>
               <button 
                 onClick={() => setIsHistoryModalOpen(false)}
-                className="text-gray-400 hover:text-gray-600"
+                className="text-slate-400 hover:text-slate-600 p-2 hover:bg-slate-50 rounded-full transition-colors"
               >
-                <X className="h-6 w-6" />
+                <X className="h-5 w-5" />
               </button>
             </div>
             
-            <div className="flex-1 overflow-auto p-6">
+            <div className="flex-1 overflow-auto p-0">
               {history.length === 0 ? (
-                <div className="text-center py-12 text-gray-500 italic">
-                  No transactions found for this product.
+                <div className="text-center py-16 text-slate-500 italic bg-slate-50/50">
+                  <p>No transactions found for this product.</p>
                 </div>
               ) : (
                 <table className="w-full text-sm text-left">
-                  <thead className="bg-gray-50 text-gray-500 uppercase text-xs">
+                  <thead className="bg-slate-50/80 text-slate-500 uppercase text-xs font-semibold tracking-wider sticky top-0 backdrop-blur-sm border-b border-gray-100">
                     <tr>
-                      <th className="px-4 py-3">Date</th>
-                      <th className="px-4 py-3">Type</th>
-                      <th className="px-4 py-3">Category</th>
-                      <th className="px-4 py-3 text-right">Qty</th>
-                      <th className="px-4 py-3">Notes</th>
+                      <th className="px-6 py-4">Date</th>
+                      <th className="px-6 py-4">Type</th>
+                      <th className="px-6 py-4">Category</th>
+                      <th className="px-6 py-4 text-right">Qty</th>
+                      <th className="px-6 py-4 text-right">Balance</th>
+                      <th className="px-6 py-4">Notes</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-gray-50 bg-white">
                     {history.map((t) => (
-                      <tr key={t.id}>
-                        <td className="px-4 py-3 whitespace-nowrap">
+                      <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap text-slate-600">
                           {new Date(t.date).toLocaleString()}
                         </td>
-                        <td className="px-4 py-3">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium uppercase ${
-                            t.type === 'in' ? 'bg-green-100 text-green-800' : 
-                            t.type === 'out' ? 'bg-red-100 text-red-800' : 
-                            'bg-blue-100 text-blue-800'
-                          }`}>
-                            {t.type}
+                        <td className="px-6 py-4">
+                          <span className={cn(
+                            "px-2.5 py-1 rounded-full text-xs font-semibold border",
+                            t.type === 'in' ? "bg-emerald-50 text-emerald-700 border-emerald-100" :
+                            t.type === 'out' ? "bg-rose-50 text-rose-700 border-rose-100" :
+                            "bg-blue-50 text-blue-700 border-blue-100"
+                          )}>
+                            {t.type.toUpperCase()}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-gray-600">{t.category || '-'}</td>
-                        <td className={`px-4 py-3 text-right font-bold ${
-                          t.type === 'in' ? 'text-green-600' : 'text-red-600'
-                        }`}>
+                        <td className="px-6 py-4 text-slate-600">{t.category || '-'}</td>
+                        <td className={cn(
+                          "px-6 py-4 text-right font-mono font-medium",
+                          t.type === 'in' ? "text-emerald-600" : "text-rose-600"
+                        )}>
                           {t.type === 'in' ? '+' : '-'}{t.quantity}
                         </td>
-                        <td className="px-4 py-3 text-gray-500 max-w-xs truncate" title={t.notes}>
+                        <td className="px-6 py-4 text-right font-mono font-bold text-slate-700">
+                          {t.balance !== undefined ? t.balance : '-'}
+                        </td>
+                        <td className="px-6 py-4 text-slate-500 max-w-xs truncate" title={t.notes}>
                           {t.notes}
                         </td>
                       </tr>
@@ -480,10 +817,10 @@ export default function Inventory() {
               )}
             </div>
 
-            <div className="p-6 border-t border-gray-100 bg-gray-50 flex justify-end">
+            <div className="p-4 border-t border-gray-100 bg-gray-50/50 flex justify-end">
               <button
                 onClick={() => setIsHistoryModalOpen(false)}
-                className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="px-5 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-gray-50 hover:text-slate-900 shadow-sm transition-all"
               >
                 Close
               </button>
